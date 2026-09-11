@@ -63,13 +63,14 @@
       color: #ffd60a;
       word-break: break-word;
     }
-    .dynamic-active {
-      border-left-color: #0a84ff;
-      background: #0d1624;
-      border: 1px solid rgba(10, 132, 255, 0.4);
+    /* 當前正在講話的動態卡片（邊說邊跑） */
+    .live-stream {
+      border-left-color: #38bdf8;
+      background: #081524;
+      border: 1px solid rgba(56, 189, 248, 0.4);
     }
-    .dynamic-active .trans {
-      color: #60a5fa;
+    .live-stream .trans {
+      color: #38bdf8;
     }
     .status {
       padding: 6px 12px;
@@ -93,9 +94,9 @@
   </header>
 
   <div id="log">
-    <div class="item dynamic-active" id="liveCard">
+    <div class="item live-stream" id="liveCard">
       <div class="orig" id="currOrig">等待台上聲音...</div>
-      <div class="trans" id="currTrans">即時動態翻譯將顯示於此</div>
+      <div class="trans" id="currTrans">即時中文字幕將隨講話滾動</div>
     </div>
   </div>
 
@@ -112,11 +113,10 @@
 
     let recognition = null;
     let running = false;
-    let debounceTimer = null;
-    let lastCommitText = "";
-    let isTranslating = false;
+    let streamTimer = null;
+    let lastQueryText = "";
+    let lastSavedSentence = "";
 
-    // 映射語言代碼給收音用
     const speechLangMap = {
       'en': 'en-US',
       'ja': 'ja-JP',
@@ -139,7 +139,7 @@
       recognition.lang = speechLangMap[lang.value];
 
       recognition.onstart = () => {
-        statusBar.innerText = "● 正在持續收音與辨識中...";
+        statusBar.innerText = "● 即時收音中（隨講隨翻）";
       };
 
       recognition.onresult = (e) => {
@@ -154,21 +154,21 @@
           }
         }
 
-        const fullSentence = (finalChunk || interim).trim();
-        if (!fullSentence) return;
+        const activeText = (finalChunk || interim).trim();
+        if (!activeText) return;
 
-        currOrig.innerText = fullSentence;
+        currOrig.innerText = activeText;
 
-        // 防抖 300ms 動態翻譯，避免快速講話時卡住
-        clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => {
-          doTranslate(fullSentence, Boolean(finalChunk));
-        }, 300);
+        // 核心改進：不再等講完，講話中途每 150ms 極速捕捉並翻譯
+        clearTimeout(streamTimer);
+        streamTimer = setTimeout(() => {
+          liveTranslate(activeText, Boolean(finalChunk));
+        }, 150);
       };
 
       recognition.onerror = (e) => {
         if (e.error !== 'no-speech') {
-          statusBar.innerText = "重新連線麥克風 (" + e.error + ")";
+          statusBar.innerText = "收音調適中 (" + e.error + ")";
         }
       };
 
@@ -179,53 +179,48 @@
       };
     }
 
-    // 解決 CORS 跨域限制的翻譯通道
-    async function doTranslate(text, isFinal) {
-      if (isTranslating) return;
-      isTranslating = true;
+    // 極速 JSONP 動態通道（穿透 Safari CORS，延遲僅約 100ms）
+    function liveTranslate(text, isFinal) {
+      if (!text || text === lastQueryText) return;
+      lastQueryText = text;
+
       const sl = lang.value;
       const tl = 'zh-TW';
+      const callbackName = 'gtx_' + Math.floor(Math.random() * 1000000);
 
-      try {
-        // 使用支援 CORS 的公開端點
-        const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${sl}|${tl}`);
-        const data = await res.json();
-        
-        let translated = "";
-        if (data && data.responseData && data.responseData.translatedText) {
-          translated = data.responseData.translatedText;
-          // 若 API 回傳全大寫警告，取 match 陣列備用
-          if (translated.includes("MYMEMORY WARNING")) {
-            if (data.matches && data.matches.length > 0) {
-              translated = data.matches[0].translation;
+      window[callbackName] = function(data) {
+        try {
+          if (data && data[0]) {
+            const translated = data[0].map(x => x[0]).join('');
+            if (translated) {
+              currTrans.innerText = translated;
+
+              // 當講者停頓確認一句結束，將其定稿轉為上方歷史卡片
+              if (isFinal && text !== lastSavedSentence) {
+                lastSavedSentence = text;
+                archiveSentence(text, translated);
+              }
             }
           }
+        } finally {
+          delete window[callbackName];
+          if (script && script.parentNode) script.parentNode.removeChild(script);
         }
+      };
 
-        if (translated) {
-          currTrans.innerText = translated;
-
-          // 說完整句固化至卡片
-          if (isFinal && text !== lastCommitText) {
-            lastCommitText = text;
-            commitCard(text, translated);
-          }
-        }
-      } catch (err) {
-        console.error("翻譯失敗:", err);
-      } finally {
-        isTranslating = false;
-      }
+      const script = document.createElement('script');
+      script.src = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sl}&tl=${tl}&dt=t&q=${encodeURIComponent(text)}&callback=${callbackName}`;
+      document.body.appendChild(script);
     }
 
-    function commitCard(orig, trans) {
+    function archiveSentence(orig, trans) {
       const div = document.createElement('div');
       div.className = 'item';
       div.innerHTML = `<div class="orig">${orig}</div><div class="trans" style="color: #ffd60a;">${trans}</div>`;
       log.insertBefore(div, liveCard);
       log.scrollTop = log.scrollHeight;
 
-      currOrig.innerText = "聆聽下一句中...";
+      currOrig.innerText = "正在聆聽...";
       currTrans.innerText = "...";
     }
 
