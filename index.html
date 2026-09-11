@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>LiveEcho 現場即時翻譯</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: #0b0c10;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    header {
+      padding: 12px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #1f2833;
+      border-bottom: 1px solid #333;
+    }
+    select, button {
+      background: #45a29e;
+      color: #000;
+      border: none;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-weight: bold;
+      font-size: 14px;
+    }
+    button.listening {
+      background: #ff4d4d;
+      color: white;
+    }
+    .content-area {
+      flex: 1;
+      padding: 20px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .source-box {
+      font-size: 16px;
+      color: #888;
+      border-left: 3px solid #66fcf1;
+      padding-left: 10px;
+    }
+    .trans-box {
+      font-size: 26px;
+      line-height: 1.4;
+      font-weight: bold;
+      color: #66fcf1;
+      word-break: break-word;
+    }
+    .hint {
+      color: #555;
+      font-size: 13px;
+      text-align: center;
+      padding: 6px;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div>
+      <label for="langSelect" style="font-size: 12px; color: #aaa;">台上語言：</label>
+      <select id="langSelect">
+        <option value="en-US">英文 (English)</option>
+        <option value="ja-JP">日文 (日本語)</option>
+        <option value="ko-KR">韓文 (한국어)</option>
+        <option value="zh-TW">中文 (國語)</option>
+      </select>
+    </div>
+    <button id="toggleBtn">開始收音翻譯</button>
+  </header>
+
+  <div class="content-area" id="scrollBox">
+    <div class="source-box" id="sourceText">等待語音輸入...</div>
+    <div class="trans-box" id="translatedText">即時中文翻譯將顯示於此</div>
+  </div>
+
+  <div class="hint">演講/演唱會建議將 iPhone 麥克風對向前方音響</div>
+
+  <script>
+    const toggleBtn = document.getElementById('toggleBtn');
+    const langSelect = document.getElementById('langSelect');
+    const sourceText = document.getElementById('sourceText');
+    const translatedText = document.getElementById('translatedText');
+
+    let isListening = false;
+    let recognition = null;
+    let wakeLock = null;
+
+    async function requestWakeLock() {
+      try {
+        if ('wakeLock' in navigator) {
+          wakeLock = await navigator.wakeLock.request('screen');
+        }
+      } catch (err) {
+        console.log(err);
+      }
+    }
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      alert("您的瀏覽器不支援原生收音，請使用 iPhone Safari 開啟！");
+    } else {
+      recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+
+      recognition.onresult = async (event) => {
+        let interimTranscript = '';
+        let finalTranscript = '';
+
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            finalTranscript += event.results[i][0].transcript;
+          } else {
+            interimTranscript += event.results[i][0].transcript;
+          }
+        }
+
+        const currentText = finalTranscript || interimTranscript;
+        if (currentText) {
+          sourceText.innerText = currentText;
+          translateToChinese(currentText);
+        }
+      };
+
+      recognition.onerror = (e) => {
+        console.error("收音錯誤:", e);
+      };
+
+      recognition.onend = () => {
+        if (isListening) recognition.start();
+      };
+    }
+
+    async function translateToChinese(text) {
+      try {
+        const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURI(text)}&langpair=${langSelect.value.split('-')[0]}|zh-TW`);
+        const data = await res.json();
+        if (data.responseData && data.responseData.translatedText) {
+          translatedText.innerText = data.responseData.translatedText;
+        }
+      } catch (err) {
+        translatedText.innerText = "翻譯載入中...";
+      }
+    }
+
+    toggleBtn.addEventListener('click', () => {
+      if (!isListening) {
+        recognition.lang = langSelect.value;
+        recognition.start();
+        requestWakeLock();
+        isListening = true;
+        toggleBtn.innerText = "停止收音";
+        toggleBtn.classList.add('listening');
+      } else {
+        recognition.stop();
+        if (wakeLock) wakeLock.release();
+        isListening = false;
+        toggleBtn.innerText = "開始收音翻譯";
+        toggleBtn.classList.remove('listening');
+      }
+    });
+  </script>
+</body>
+</html>
