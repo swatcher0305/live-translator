@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>LiveEcho 現場即時翻譯</title>
+  <title>LiveEcho 現場即時聽譯 v2</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -27,7 +27,7 @@
       background: #45a29e;
       color: #000;
       border: none;
-      padding: 8px 12px;
+      padding: 8px 14px;
       border-radius: 6px;
       font-weight: bold;
       font-size: 14px;
@@ -38,11 +38,11 @@
     }
     .content-area {
       flex: 1;
-      padding: 20px;
+      padding: 16px;
       overflow-y: auto;
       display: flex;
       flex-direction: column;
-      gap: 16px;
+      gap: 14px;
     }
     .history-card {
       background: #161b22;
@@ -54,12 +54,14 @@
       font-size: 14px;
       color: #888;
       margin-bottom: 4px;
+      word-break: break-word;
     }
     .history-card .trans {
       font-size: 22px;
       line-height: 1.4;
       font-weight: bold;
       color: #ffd60a;
+      word-break: break-word;
     }
     .current-card {
       border: 1px solid #66fcf1;
@@ -69,10 +71,10 @@
       color: #66fcf1;
     }
     .hint {
-      color: #777;
-      font-size: 12px;
+      color: #888;
+      font-size: 11px;
       text-align: center;
-      padding: 8px;
+      padding: 6px;
       background: #1f2833;
     }
   </style>
@@ -94,11 +96,11 @@
   <div class="content-area" id="subtitleContainer">
     <div class="history-card current-card" id="activeCard">
       <div class="source" id="sourceText">等待台上聲音...</div>
-      <div class="trans" id="translatedText">即時中文翻譯將顯示於此</div>
+      <div class="trans" id="translatedText">【v2 最新版】中文翻譯將在此顯示</div>
     </div>
   </div>
 
-  <div class="hint">稍微停頓即會自動送翻，保證中文不卡死</div>
+  <div class="hint">稍微停頓 0.5 秒即自動翻出繁中</div>
 
   <script>
     const toggleBtn = document.getElementById('toggleBtn');
@@ -112,7 +114,7 @@
     let recognition = null;
     let wakeLock = null;
     let pauseTimer = null;
-    let lastSentText = "";
+    let lastProcessed = "";
 
     async function requestWakeLock() {
       try {
@@ -146,16 +148,15 @@
         const currentSaid = (finalTranscript || interimTranscript).trim();
         if (!currentSaid) return;
 
-        // 原文即時跟隨
         sourceText.innerText = currentSaid;
 
-        // 核心改進：不再等整篇說完，講話稍微停頓 600ms 就立刻翻出中文
+        // 停頓 500ms 快速出字
         clearTimeout(pauseTimer);
         pauseTimer = setTimeout(() => {
-          if (currentSaid !== lastSentText) {
+          if (currentSaid !== lastProcessed) {
             doTranslate(currentSaid);
           }
-        }, 600);
+        }, 500);
       };
 
       recognition.onerror = (e) => {
@@ -169,9 +170,9 @@
       };
     }
 
-    // 最一開始保證能翻出中文的穩定 API
+    // 繁中翻譯核心
     async function doTranslate(text) {
-      lastSentText = text;
+      lastProcessed = text;
       const src = langSelect.value.split('-')[0];
       translatedText.innerText = "翻譯中...";
 
@@ -189,8 +190,6 @@
 
         if (result) {
           translatedText.innerText = result;
-
-          // 固化為歷史卡片，並清空等待下一句短語
           archiveCard(text, result);
         }
       } catch (err) {
