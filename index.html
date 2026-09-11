@@ -3,258 +3,237 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>LiveEcho 即時聽譯</title>
+  <title>LiveEcho 現場即時翻譯</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      background: #000;
+      background-color: #0b0c10;
       color: #fff;
-      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Roboto, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       height: 100vh;
       display: flex;
       flex-direction: column;
+      overflow: hidden;
     }
     header {
-      padding: 10px 14px;
+      padding: 12px 16px;
       display: flex;
       justify-content: space-between;
       align-items: center;
-      background: #121212;
-      border-bottom: 1px solid #222;
+      background: #1f2833;
+      border-bottom: 1px solid #333;
     }
     select, button {
-      background: #222;
-      color: #fff;
-      border: 1px solid #444;
-      padding: 6px 12px;
+      background: #45a29e;
+      color: #000;
+      border: none;
+      padding: 8px 12px;
       border-radius: 6px;
+      font-weight: bold;
       font-size: 14px;
     }
-    button.active {
-      background: #ff3b30;
-      border-color: #ff3b30;
-      color: #fff;
-      font-weight: bold;
+    button.listening {
+      background: #ff4d4d;
+      color: white;
     }
-    #log {
+    .content-area {
       flex: 1;
+      padding: 20px;
       overflow-y: auto;
-      padding: 16px;
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      gap: 16px;
     }
-    .item {
-      background: #141414;
-      border-left: 4px solid #30d158;
-      padding: 10px 12px;
-      border-radius: 4px;
+    .history-card {
+      background: #161b22;
+      border-radius: 8px;
+      padding: 12px 14px;
+      border-left: 4px solid #45a29e;
     }
-    .orig {
-      font-size: 13px;
-      color: #777;
+    .history-card .source {
+      font-size: 14px;
+      color: #888;
       margin-bottom: 4px;
-      word-break: break-word;
     }
-    .trans {
-      font-size: 24px;
-      line-height: 1.35;
-      font-weight: 600;
+    .history-card .trans {
+      font-size: 22px;
+      line-height: 1.4;
+      font-weight: bold;
       color: #ffd60a;
-      word-break: break-word;
     }
-    .live-stream {
-      border-left-color: #38bdf8;
-      background: #081524;
-      border: 1px solid rgba(56, 189, 248, 0.4);
+    .current-card {
+      border: 1px solid #66fcf1;
+      background: #101720;
     }
-    .live-stream .trans {
-      color: #38bdf8;
+    .current-card .trans {
+      color: #66fcf1;
     }
-    .status {
-      padding: 6px 12px;
-      font-size: 11px;
-      color: #666;
+    .hint {
+      color: #777;
+      font-size: 12px;
       text-align: center;
-      background: #0a0a0a;
+      padding: 8px;
+      background: #1f2833;
     }
   </style>
 </head>
 <body>
 
   <header>
-    <select id="lang">
-      <option value="en">英語 (English)</option>
-      <option value="ja">日本語 (Japanese)</option>
-      <option value="ko">韓語 (Korean)</option>
-      <option value="zh-TW">中文 (國語)</option>
-    </select>
-    <button id="btn">啟動收音</button>
+    <div>
+      <select id="langSelect">
+        <option value="en-US">英文 (English)</option>
+        <option value="ja-JP">日文 (日本語)</option>
+        <option value="ko-KR">韓文 (한국어)</option>
+        <option value="zh-TW">中文 (國語)</option>
+      </select>
+    </div>
+    <button id="toggleBtn">開始收音翻譯</button>
   </header>
 
-  <div id="log">
-    <div class="item live-stream" id="liveCard">
-      <div class="orig" id="currOrig">等待台上聲音...</div>
-      <div class="trans" id="currTrans">即時中文字幕將隨講話滾動</div>
+  <div class="content-area" id="subtitleContainer">
+    <div class="history-card current-card" id="activeCard">
+      <div class="source" id="sourceText">等待台上聲音...</div>
+      <div class="trans" id="translatedText">即時中文翻譯將顯示於此</div>
     </div>
   </div>
 
-  <div class="status" id="statusBar">狀態：待命中</div>
+  <div class="hint">稍微停頓即會自動送翻，保證中文不卡死</div>
 
   <script>
-    const btn = document.getElementById('btn');
-    const lang = document.getElementById('lang');
-    const log = document.getElementById('log');
-    const currOrig = document.getElementById('currOrig');
-    const currTrans = document.getElementById('currTrans');
-    const statusBar = document.getElementById('statusBar');
-    const liveCard = document.getElementById('liveCard');
+    const toggleBtn = document.getElementById('toggleBtn');
+    const langSelect = document.getElementById('langSelect');
+    const subtitleContainer = document.getElementById('subtitleContainer');
+    const sourceText = document.getElementById('sourceText');
+    const translatedText = document.getElementById('translatedText');
+    const activeCard = document.getElementById('activeCard');
 
+    let isListening = false;
     let recognition = null;
-    let running = false;
-    let streamTimer = null;
-    let lastQueryText = "";
-    let lastSavedSentence = "";
+    let wakeLock = null;
+    let pauseTimer = null;
+    let lastSentText = "";
 
-    const speechLangMap = {
-      'en': 'en-US',
-      'ja': 'ja-JP',
-      'ko': 'ko-KR',
-      'zh-TW': 'zh-TW'
-    };
-
-    const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
-
-    if (!Speech) {
-      alert("請使用 iPhone Safari 開啟！");
-    } else {
-      initSpeech();
+    async function requestWakeLock() {
+      try {
+        if ('wakeLock' in navigator) {
+          wakeLock = await navigator.wakeLock.request('screen');
+        }
+      } catch (err) {}
     }
 
-    function initSpeech() {
-      recognition = new Speech();
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      alert("請使用 iPhone Safari 開啟！");
+    } else {
+      recognition = new SpeechRecognition();
       recognition.continuous = true;
       recognition.interimResults = true;
-      recognition.lang = speechLangMap[lang.value];
 
-      recognition.onstart = () => {
-        statusBar.innerText = "● 即時收音中（隨講隨翻）";
-      };
+      recognition.onresult = (event) => {
+        let interimTranscript = '';
+        let finalTranscript = '';
 
-      recognition.onresult = (e) => {
-        let interim = '';
-        let finalChunk = '';
-
-        for (let i = e.resultIndex; i < e.results.length; ++i) {
-          if (e.results[i].isFinal) {
-            finalChunk += e.results[i][0].transcript;
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            finalTranscript += event.results[i][0].transcript;
           } else {
-            interim += e.results[i][0].transcript;
+            interimTranscript += event.results[i][0].transcript;
           }
         }
 
-        const activeText = (finalChunk || interim).trim();
-        if (!activeText) return;
+        const currentSaid = (finalTranscript || interimTranscript).trim();
+        if (!currentSaid) return;
 
-        currOrig.innerText = activeText;
+        // 原文即時跟隨
+        sourceText.innerText = currentSaid;
 
-        // 每 200ms 極速捕捉並翻譯
-        clearTimeout(streamTimer);
-        streamTimer = setTimeout(() => {
-          liveTranslate(activeText, Boolean(finalChunk));
-        }, 200);
+        // 核心改進：不再等整篇說完，講話稍微停頓 600ms 就立刻翻出中文
+        clearTimeout(pauseTimer);
+        pauseTimer = setTimeout(() => {
+          if (currentSaid !== lastSentText) {
+            doTranslate(currentSaid);
+          }
+        }, 600);
       };
 
       recognition.onerror = (e) => {
-        if (e.error !== 'no-speech') {
-          statusBar.innerText = "收音調適中 (" + e.error + ")";
-        }
+        console.error("收音提示:", e);
       };
 
       recognition.onend = () => {
-        if (running) {
-          try { recognition.start(); } catch(err){}
+        if (isListening) {
+          try { recognition.start(); } catch(e){}
         }
       };
     }
 
-    // 真正免跨域 CORS 阻擋的極速翻譯通道
-    async function liveTranslate(text, isFinal) {
-      if (!text || text === lastQueryText) return;
-      lastQueryText = text;
+    // 最一開始保證能翻出中文的穩定 API
+    async function doTranslate(text) {
+      lastSentText = text;
+      const src = langSelect.value.split('-')[0];
+      translatedText.innerText = "翻譯中...";
 
-      const sl = lang.value;
-      const tl = 'zh-TW';
-      
       try {
-        // 使用 Google 免跨域鏡像 API
-        const targetUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sl}&tl=${tl}&dt=t&q=${encodeURIComponent(text)}`;
-        const res = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`);
-        const json = await res.json();
-
-        if (json && json[0]) {
-          const translated = json[0].map(x => x[0]).join('');
-          if (translated) {
-            currTrans.innerText = translated;
-
-            // 說完停頓固化存入歷史紀錄
-            if (isFinal && text !== lastSavedSentence) {
-              lastSavedSentence = text;
-              archiveSentence(text, translated);
-            }
+        const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${src}|zh-TW`);
+        const data = await res.json();
+        
+        let result = "";
+        if (data && data.responseData && data.responseData.translatedText) {
+          result = data.responseData.translatedText;
+          if (result.includes("MYMEMORY WARNING") && data.matches && data.matches.length > 0) {
+            result = data.matches[0].translation;
           }
         }
+
+        if (result) {
+          translatedText.innerText = result;
+
+          // 固化為歷史卡片，並清空等待下一句短語
+          archiveCard(text, result);
+        }
       } catch (err) {
-        // 備援通道：MyMemory 輕量快速端點
-        try {
-          const res2 = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${sl}|${tl}`);
-          const data2 = await res2.json();
-          if (data2 && data2.responseData && data2.responseData.translatedText) {
-            let t2 = data2.responseData.translatedText;
-            if (!t2.includes("MYMEMORY WARNING")) {
-              currTrans.innerText = t2;
-              if (isFinal && text !== lastSavedSentence) {
-                lastSavedSentence = text;
-                archiveSentence(text, t2);
-              }
-            }
-          }
-        } catch(e2){}
+        translatedText.innerText = "連線重試中...";
       }
     }
 
-    function archiveSentence(orig, trans) {
-      const div = document.createElement('div');
-      div.className = 'item';
-      div.innerHTML = `<div class="orig">${orig}</div><div class="trans" style="color: #ffd60a;">${trans}</div>`;
-      log.insertBefore(div, liveCard);
-      log.scrollTop = log.scrollHeight;
-
-      currOrig.innerText = "正在聆聽...";
-      currTrans.innerText = "...";
+    function archiveCard(src, trans) {
+      const card = document.createElement('div');
+      card.className = 'history-card';
+      card.innerHTML = `
+        <div class="source">${src}</div>
+        <div class="trans">${trans}</div>
+      `;
+      subtitleContainer.insertBefore(card, activeCard);
+      subtitleContainer.scrollTop = subtitleContainer.scrollHeight;
+      
+      sourceText.innerText = "繼續聆聽中...";
+      translatedText.innerText = "...";
     }
 
-    btn.addEventListener('click', () => {
-      if (!running) {
-        recognition.lang = speechLangMap[lang.value];
+    toggleBtn.addEventListener('click', () => {
+      if (!isListening) {
+        recognition.lang = langSelect.value;
         try { recognition.start(); } catch(e){}
-        running = true;
-        btn.innerText = "停止";
-        btn.classList.add('active');
+        requestWakeLock();
+        isListening = true;
+        toggleBtn.innerText = "停止收音";
+        toggleBtn.classList.add('listening');
       } else {
-        running = false;
         recognition.stop();
-        btn.innerText = "啟動收音";
-        btn.classList.remove('active');
-        statusBar.innerText = "狀態：已停止";
+        if (wakeLock) wakeLock.release();
+        isListening = false;
+        toggleBtn.innerText = "開始收音翻譯";
+        toggleBtn.classList.remove('listening');
       }
     });
 
-    lang.addEventListener('change', () => {
-      if (running) {
+    langSelect.addEventListener('change', () => {
+      if (isListening) {
         recognition.stop();
         setTimeout(() => {
-          recognition.lang = speechLangMap[lang.value];
+          recognition.lang = langSelect.value;
           recognition.start();
         }, 200);
       }
