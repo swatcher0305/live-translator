@@ -7,8 +7,8 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      background-color: #0b0c10;
-      color: #fff;
+      background-color: #0d1117;
+      color: #e6edf3;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       height: 100vh;
       display: flex;
@@ -20,48 +20,66 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
-      background: #1f2833;
-      border-bottom: 1px solid #333;
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
     }
     select, button {
-      background: #45a29e;
-      color: #000;
-      border: none;
+      background: #238636;
+      color: #ffffff;
+      border: 1px solid rgba(240, 246, 252, 0.1);
       padding: 8px 12px;
       border-radius: 6px;
       font-weight: bold;
       font-size: 14px;
     }
-    button.listening {
-      background: #ff4d4d;
-      color: white;
+    select {
+      background: #21262d;
     }
+    button.listening {
+      background: #da3633;
+    }
+    /* 字幕串流區域 */
     .content-area {
       flex: 1;
-      padding: 20px;
+      padding: 16px;
       overflow-y: auto;
       display: flex;
       flex-direction: column;
-      gap: 16px;
+      gap: 14px;
+      scroll-behavior: smooth;
     }
-    .source-box {
-      font-size: 16px;
-      color: #888;
-      border-left: 3px solid #66fcf1;
-      padding-left: 10px;
+    .history-card {
+      background: #161b22;
+      border-radius: 8px;
+      padding: 12px 14px;
+      border: 1px solid #30363d;
     }
-    .trans-box {
-      font-size: 26px;
+    .history-source {
+      font-size: 13px;
+      color: #8b949e;
+      margin-bottom: 4px;
+    }
+    .history-trans {
+      font-size: 20px;
       line-height: 1.4;
-      font-weight: bold;
-      color: #66fcf1;
-      word-break: break-word;
+      font-weight: 600;
+      color: #58a6ff;
+    }
+    /* 當前正在辨識的浮動區 */
+    .current-card {
+      border: 1px solid #58a6ff;
+      background: #0d1117;
+    }
+    .current-card .history-trans {
+      color: #3fb950;
     }
     .hint {
-      color: #555;
-      font-size: 13px;
+      color: #8b949e;
+      font-size: 12px;
       text-align: center;
-      padding: 6px;
+      padding: 8px;
+      background: #161b22;
+      border-top: 1px solid #30363d;
     }
   </style>
 </head>
@@ -69,7 +87,6 @@
 
   <header>
     <div>
-      <label for="langSelect" style="font-size: 12px; color: #aaa;">台上語言：</label>
       <select id="langSelect">
         <option value="en-US">英文 (English)</option>
         <option value="ja-JP">日文 (日本語)</option>
@@ -80,43 +97,46 @@
     <button id="toggleBtn">開始收音翻譯</button>
   </header>
 
-  <div class="content-area" id="scrollBox">
-    <div class="source-box" id="sourceText">等待語音輸入...</div>
-    <div class="trans-box" id="translatedText">即時中文翻譯將顯示於此</div>
+  <div class="content-area" id="subtitleContainer">
+    <div class="history-card current-card" id="activeCard">
+      <div class="history-source" id="currentSource">等待台上聲音...</div>
+      <div class="history-trans" id="currentTrans">即時繁中字幕將顯示於此</div>
+    </div>
   </div>
 
-  <div class="hint">演講/演唱會建議將 iPhone 麥克風對向前方音響</div>
+  <div class="hint">演講/演唱會請盡量靠近音響，系統將自動逐句滾動翻譯</div>
 
   <script>
     const toggleBtn = document.getElementById('toggleBtn');
     const langSelect = document.getElementById('langSelect');
-    const sourceText = document.getElementById('sourceText');
-    const translatedText = document.getElementById('translatedText');
+    const subtitleContainer = document.getElementById('subtitleContainer');
+    const currentSource = document.getElementById('currentSource');
+    const currentTrans = document.getElementById('currentTrans');
 
     let isListening = false;
     let recognition = null;
     let wakeLock = null;
+    let debounceTimer = null;
+    let lastProcessedText = "";
 
     async function requestWakeLock() {
       try {
         if ('wakeLock' in navigator) {
           wakeLock = await navigator.wakeLock.request('screen');
         }
-      } catch (err) {
-        console.log(err);
-      }
+      } catch (err) {}
     }
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
-      alert("您的瀏覽器不支援原生收音，請使用 iPhone Safari 開啟！");
+      alert("請使用 iPhone Safari 開啟！");
     } else {
       recognition = new SpeechRecognition();
       recognition.continuous = true;
       recognition.interimResults = true;
 
-      recognition.onresult = async (event) => {
+      recognition.onresult = (event) => {
         let interimTranscript = '';
         let finalTranscript = '';
 
@@ -128,38 +148,91 @@
           }
         }
 
-        const currentText = finalTranscript || interimTranscript;
-        if (currentText) {
-          sourceText.innerText = currentText;
-          translateToChinese(currentText);
+        if (finalTranscript.trim()) {
+          processSentence(finalTranscript.trim(), true);
+        } else if (interimTranscript.trim()) {
+          currentSource.innerText = interimTranscript;
+          // 防抖機制：說話中途稍微停頓 800ms 即預先翻譯，避免漏句
+          clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(() => {
+            if (interimTranscript.trim() !== lastProcessedText) {
+              processSentence(interimTranscript.trim(), false);
+            }
+          }, 800);
         }
       };
 
       recognition.onerror = (e) => {
-        console.error("收音錯誤:", e);
+        console.error("收音中斷或錯誤:", e);
       };
 
       recognition.onend = () => {
-        if (isListening) recognition.start();
+        if (isListening) {
+          try { recognition.start(); } catch(e){}
+        }
       };
     }
 
-    async function translateToChinese(text) {
-      try {
-        const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURI(text)}&langpair=${langSelect.value.split('-')[0]}|zh-TW`);
-        const data = await res.json();
-        if (data.responseData && data.responseData.translatedText) {
-          translatedText.innerText = data.responseData.translatedText;
-        }
-      } catch (err) {
-        translatedText.innerText = "翻譯載入中...";
+    // 句子處理與歸檔
+    async function processSentence(text, isFinal) {
+      if (!text || text === lastProcessedText) return;
+      lastProcessedText = text;
+      currentSource.innerText = text;
+
+      const trans = await fetchTranslation(text);
+      currentTrans.innerText = trans;
+
+      if (isFinal) {
+        // 完成一句後，封存為歷史卡片，避免被下一句洗掉
+        archiveCurrentSubtitle(text, trans);
+        currentSource.innerText = "聆聽下一句中...";
+        currentTrans.innerText = "...";
+        lastProcessedText = "";
       }
+    }
+
+    // 歷史卡片產生與自動向下滾動
+    function archiveCurrentSubtitle(source, trans) {
+      const card = document.createElement('div');
+      card.className = 'history-card';
+      card.innerHTML = `
+        <div class="history-source">${source}</div>
+        <div class="history-trans">${trans}</div>
+      `;
+      subtitleContainer.insertBefore(card, document.getElementById('activeCard'));
+      subtitleContainer.scrollTop = subtitleContainer.scrollHeight;
+    }
+
+    // 雙引擎備援翻譯
+    async function fetchTranslation(text) {
+      const src = langSelect.value.split('-')[0];
+      // 引擎 1: MyMemory
+      try {
+        const url1 = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${src}|zh-TW`;
+        const res = await fetch(url1);
+        const data = await res.json();
+        if (data && data.responseData && data.responseData.translatedText) {
+          return data.responseData.translatedText;
+        }
+      } catch (err) {}
+
+      // 備援引擎 2: Google 免費接口備援
+      try {
+        const url2 = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${src}&tl=zh-TW&dt=t&q=${encodeURIComponent(text)}`;
+        const res2 = await fetch(url2);
+        const data2 = await res2.json();
+        if (data2 && data2[0]) {
+          return data2[0].map(item => item[0]).join('');
+        }
+      } catch (err) {}
+
+      return "（翻譯獲取中...）";
     }
 
     toggleBtn.addEventListener('click', () => {
       if (!isListening) {
         recognition.lang = langSelect.value;
-        recognition.start();
+        try { recognition.start(); } catch(e){}
         requestWakeLock();
         isListening = true;
         toggleBtn.innerText = "停止收音";
@@ -170,6 +243,16 @@
         isListening = false;
         toggleBtn.innerText = "開始收音翻譯";
         toggleBtn.classList.remove('listening');
+      }
+    });
+
+    langSelect.addEventListener('change', () => {
+      if (isListening) {
+        recognition.stop();
+        setTimeout(() => {
+          recognition.lang = langSelect.value;
+          recognition.start();
+        }, 300);
       }
     });
   </script>
